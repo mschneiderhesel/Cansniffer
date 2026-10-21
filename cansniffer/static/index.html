@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAN Sniffer</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --fg:#e6e6e6; --mut:#8b93a3; --acc:#4fa3ff; --ok:#3ccf7a; --warn:#f0a93a; --bad:#ff5c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header b { font-size:16px; }
+  .pill { padding:2px 8px; border-radius:10px; background:#232833; color:var(--mut); font-size:12px; }
+  .pill.on { background:#153d2a; color:var(--ok); }
+  .pill.rec { background:#4a1d1d; color:var(--bad); }
+  nav { display:flex; gap:4px; padding:8px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  nav button { background:none; border:1px solid var(--line); color:var(--mut); padding:6px 12px; border-radius:6px; cursor:pointer; }
+  nav button.active { color:var(--fg); border-color:var(--acc); }
+  main { padding:14px; }
+  section { display:none; } section.active { display:block; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  input, select { background:#0b0d12; border:1px solid var(--line); color:var(--fg); padding:6px 8px; border-radius:6px; font-size:14px; }
+  input[type=number] { width:90px; }
+  button.b { background:var(--acc); border:none; color:#000; padding:7px 12px; border-radius:6px; cursor:pointer; font-weight:600; }
+  button.b.sec { background:#2a2f3a; color:var(--fg); }
+  button.b.warn { background:var(--warn); }
+  button.b.bad { background:var(--bad); }
+  table { border-collapse:collapse; width:100%; font-family:ui-monospace,Menlo,monospace; font-size:13px; }
+  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--mut); font-weight:500; position:sticky; top:0; background:var(--bg); }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:12px; }
+  .scroll { max-height:60vh; overflow:auto; }
+  .k-const { color:var(--mut); } .k-counter { color:var(--warn); } .k-var { color:var(--ok); }
+  .chg { background:#4a1d1d; color:#ffb3b3; padding:0 3px; border-radius:3px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(64px,1fr)); gap:6px; }
+  .grid button { padding:10px 0; font-size:15px; }
+  .muted { color:var(--mut); }
+  .flash { animation: fl .6s; } @keyframes fl { from{background:#2a3d2a} to{background:none} }
+  details summary { cursor:pointer; color:var(--acc); }
+  textarea { width:100%; min-height:140px; background:#0b0d12; color:var(--fg); border:1px solid var(--line); border-radius:6px; font-family:ui-monospace,monospace; font-size:13px; padding:8px; }
+</style>
+</head>
+<body>
+<header>
+  <b>CAN Sniffer</b>
+  <span id="st-source" class="pill">keine Quelle</span>
+  <span id="st-rec" class="pill">keine Aufnahme</span>
+  <span id="st-frames" class="pill">0 Frames</span>
+  <span id="st-ids" class="pill">0 IDs</span>
+  <span id="st-err" class="pill" style="display:none"></span>
+</header>
+<nav>
+  <button data-tab="live" class="active">Live</button>
+  <button data-tab="marker">Marker</button>
+  <button data-tab="analyse">Analyse</button>
+  <button data-tab="diff">Konfig-Diff</button>
+  <button data-tab="decoder">Dekoder</button>
+</nav>
+<main>
+
+<section id="live" class="active">
+  <div class="box">
+    <div class="row">
+      <select id="iface">
+        <option value="slcan">slcan (CANable am Mac/Win)</option>
+        <option value="socketcan">socketcan (Linux/Pi)</option>
+        <option value="gs_usb">gs_usb (candleLight)</option>
+        <option value="pcan">pcan (PEAK)</option>
+        <option value="sim">Simulator</option>
+      </select>
+      <input id="channel" value="/dev/tty.usbmodem14101" style="width:230px" placeholder="Kanal">
+      <select id="bitrate"><option>125000</option><option selected>250000</option><option>500000</option><option>1000000</option></select>
+      <label><input type="checkbox" id="listen" checked> Listen-only</label>
+      <button class="b" onclick="openSource()">Öffnen</button>
+      <button class="b sec" onclick="closeSource()">Schließen</button>
+    </div>
+    <div class="row">
+      <input id="recname" placeholder="Aufnahme-Name, z. B. Abend1" style="width:200px">
+      <button class="b warn" onclick="recStart()">● Aufnahme starten</button>
+      <button class="b sec" onclick="recStop()">■ Stop</button>
+      <button class="b sec" onclick="liveReset()">Statistik zurücksetzen</button>
+      <label><input type="checkbox" id="pause"> Live-Liste anhalten</label>
+      <input id="filter" placeholder="Filter ID (hex)" style="width:120px">
+    </div>
+  </div>
+  <div class="box">
+    <div class="muted" style="margin-bottom:6px">IDs (klicken = Filter)</div>
+    <div class="scroll" style="max-height:30vh"><table id="idtab"><thead><tr><th>ID</th><th>n</th><th>DLC</th><th>min Δt ms</th><th>letzter Frame</th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="box">
+    <div class="muted" style="margin-bottom:6px">Live-Frames (neueste oben)</div>
+    <div class="scroll" style="max-height:40vh"><table id="livetab"><thead><tr><th>t</th><th>ID</th><th>Daten</th><th>ASCII</th><th>Dekodiert</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</section>
+
+<section id="marker">
+  <div class="box">
+    <div class="row">
+      <span>Kopf:</span><input type="number" id="mhead" value="1" min="1" max="20">
+      <span>Seite:</span><input type="number" id="mpage" value="1" min="1">
+      <input id="mnote" placeholder="Notiz (optional)" style="width:240px">
+    </div>
+    <div class="muted" style="margin-bottom:6px">Taste drücken – zuerst am Gerät, dann sofort hier:</div>
+    <div class="grid" id="keys"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="b sec" onclick="marker('Kellnerschlüssel rein')">Schlüssel rein</button>
+      <button class="b sec" onclick="marker('Kellnerschlüssel raus')">Schlüssel raus</button>
+      <button class="b sec" onclick="marker('Seite blättern')">Seite blättern</button>
+      <button class="b sec" onclick="marker('Zapfung Ende')">Zapfung Ende</button>
+      <button class="b sec" onclick="marker('NGx Neustart')">NGx Neustart</button>
+      <button class="b sec" onclick="marker(prompt('Marker-Text')||'Marker')">Frei…</button>
+      <button class="b sec" id="simboot" onclick="simBoot()" style="display:none">Sim: Boot-Burst</button>
+    </div>
+  </div>
+  <div class="box">
+    <div class="muted" style="margin-bottom:6px">Marker dieser Aufnahme</div>
+    <div class="scroll" style="max-height:40vh"><table id="mtab"><thead><tr><th>t</th><th>Label</th><th>Kopf</th><th>Taste</th><th>Notiz</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
+</section>
+
+<section id="analyse">
+  <div class="box">
+    <div class="row">
+      <select id="asess"></select>
+      <button class="b sec" onclick="loadSessions()">↻</button>
+      <span>Fenster ±</span><input type="number" id="awin" value="500" step="50"> ms
+      <button class="b" onclick="runIds()">ID-Statistik</button>
+      <button class="b" onclick="runWindows()">Marker-Fenster</button>
+      <a id="csvlink" class="muted" href="#" style="margin-left:auto">CSV-Export</a>
+    </div>
+  </div>
+  <div class="box" id="idstats" style="display:none">
+    <div class="muted">Byte-Klassifikation: <span class="k-const">const</span> · <span class="k-counter">Zähler</span> · <span class="k-var">variabel</span> — Klick auf ID = Prüfsummen-Test</div>
+    <div class="scroll"><table id="idstab"><thead><tr><th>ID</th><th>n</th><th>DLC</th><th>Ø Δt ms</th><th>B0</th><th>B1</th><th>B2</th><th>B3</th><th>B4</th><th>B5</th><th>B6</th><th>B7</th><th>Beispiel</th></tr></thead><tbody></tbody></table></div>
+    <div id="cs" class="muted" style="margin-top:8px"></div>
+  </div>
+  <div class="box" id="windows" style="display:none">
+    <div class="row">
+      <span>Vergleiche Marker</span><select id="cmpa"></select><span>mit</span><select id="cmpb"></select>
+      <span>ID</span><input id="cmpid" placeholder="hex" style="width:80px">
+      <button class="b sec" onclick="runCompare()">Byte-Diff</button>
+      <span id="cmpres" style="font-family:monospace"></span>
+    </div>
+    <div id="winlist"></div>
+  </div>
+</section>
+
+<section id="diff">
+  <div class="box">
+    <div class="row">
+      <span>Aufnahme A</span><select id="dsa"></select>
+      <span>Aufnahme B</span><select id="dsb"></select>
+      <span>nur ID</span><input id="dsid" placeholder="hex, leer = alle" style="width:120px">
+      <button class="b" onclick="runDiff()">Vergleichen</button>
+    </div>
+    <div class="muted">Vergleicht zwei Aufnahmen Frame für Frame in Reihenfolge – gedacht für zwei Boot-Mitschnitte, zwischen denen du genau eine Einstellung geändert hast. Nur abweichende Frames werden gezeigt.</div>
+  </div>
+  <div class="box scroll"><table id="difftab"><thead><tr><th>#</th><th>A</th><th>ASCII</th><th>B</th><th>ASCII</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="decoder">
+  <div class="box">
+    <div class="muted">Layout als JSON-Liste. Felder: <code>name, pos, len, type (u8|u16le|u16be|ascii|bits|hex), scale, enum</code>. Beispiel:</div>
+    <div class="row" style="margin-top:8px">
+      <span>ID</span><input id="decid" placeholder="hex" style="width:80px">
+      <input id="decname" placeholder="Name, z. B. Tastendruck" style="width:200px">
+      <button class="b" onclick="saveDecoder()">Speichern</button>
+    </div>
+    <textarea id="declayout">[
+  {"name": "kopf", "pos": 0},
+  {"name": "seite", "pos": 1},
+  {"name": "taste", "pos": 2},
+  {"name": "aktion", "pos": 3, "enum": {"1": "gedrückt", "0": "losgelassen"}},
+  {"name": "ml", "pos": 1, "len": 2, "type": "u16le"}
+]</textarea>
+  </div>
+  <div class="box"><table id="dectab"><thead><tr><th>ID</th><th>Name</th><th>Felder</th><th></th></tr></thead><tbody></tbody></table></div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p, o={}) => fetch('/api'+p, {headers:{'Content-Type':'application/json'}, ...o}).then(async r => { if(!r.ok) throw new Error((await r.json()).detail||r.status); return r.json(); });
+const post = (p, b) => api(p, {method:'POST', body:JSON.stringify(b||{})});
+const hx = n => n.toString(16).toUpperCase().padStart(3,'0');
+const ph = s => parseInt(s, 16);
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+  b.classList.add('active'); $('#'+b.dataset.tab).classList.add('active');
+  if (b.dataset.tab==='analyse' || b.dataset.tab==='diff') loadSessions();
+  if (b.dataset.tab==='decoder') loadDecoders();
+  if (b.dataset.tab==='marker') loadMarkers();
+});
+
+// --- Status
+let state = {};
+async function refreshStatus(){
+  state = await api('/status');
+  $('#st-source').textContent = state.open ? state.source : 'keine Quelle';
+  $('#st-source').className = 'pill' + (state.open?' on':'');
+  $('#st-rec').textContent = state.recording ? 'Aufnahme #'+state.session_id : 'keine Aufnahme';
+  $('#st-rec').className = 'pill' + (state.recording?' rec':'');
+  $('#st-frames').textContent = state.frames + ' Frames';
+  $('#st-ids').textContent = state.ids + ' IDs';
+  $('#st-err').style.display = state.error?'':'none'; $('#st-err').textContent = state.error||'';
+  $('#simboot').style.display = state.sim?'':'none';
+}
+setInterval(refreshStatus, 1000); refreshStatus();
+
+// --- Quelle
+$('#iface').onchange = () => { const v=$('#iface').value; $('#channel').value = v==='socketcan'?'can0': v==='sim'?'sim': v==='pcan'?'PCAN_USBBUS1':'/dev/tty.usbmodem14101'; };
+async function openSource(){ try{ await post('/source/open',{interface:$('#iface').value, channel:$('#channel').value, bitrate:+$('#bitrate').value, listen_only:$('#listen').checked}); refreshStatus(); }catch(e){ alert(e.message); } }
+async function closeSource(){ await post('/source/close'); refreshStatus(); }
+async function recStart(){ const n=$('#recname').value||('Aufnahme '+new Date().toLocaleString('de')); try{ await post('/record/start',{name:n}); refreshStatus(); loadMarkers(); }catch(e){ alert(e.message);} }
+async function recStop(){ await post('/record/stop'); refreshStatus(); }
+async function liveReset(){ await post('/live/reset'); }
+
+// --- Live
+let ws; const liveRows = [];
+function connectWs(){
+  ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/live');
+  ws.onmessage = ev => { if($('#pause').checked) return; const fr = JSON.parse(ev.data); const flt=$('#filter').value.trim().toUpperCase();
+    for (const f of fr){ if(flt && hx(f.id)!==flt) continue; liveRows.unshift(f); }
+    liveRows.length = Math.min(liveRows.length, 300); renderLive(); };
+  ws.onclose = () => setTimeout(connectWs, 1000);
+}
+connectWs();
+function asciiOf(hex){ return hex.split(' ').map(h=>{const c=parseInt(h,16); return c>=32&&c<127?String.fromCharCode(c):'.';}).join(''); }
+function renderLive(){
+  const tb = $('#livetab tbody'); tb.innerHTML = liveRows.map(f =>
+    `<tr><td>${new Date(f.ts*1000).toLocaleTimeString('de',{hour12:false})}.${String(Math.floor(f.ts*1000)%1000).padStart(3,'0')}</td><td>${hx(f.id)}</td><td>${f.data}</td><td>${asciiOf(f.data)}</td><td>${f.decoded?`<span class="muted">${f.name}</span> ${Object.entries(f.decoded).map(([k,v])=>k+'='+v).join(' ')}`:''}</td></tr>`).join('');
+}
+async function refreshIds(){ if(!state.open) return; const ids = await api('/live/ids');
+  $('#idtab tbody').innerHTML = ids.map(r=>`<tr onclick="$('#filter').value='${r.id_hex}'" style="cursor:pointer"><td>${r.id_hex}</td><td>${r.count}</td><td>${r.dlc}</td><td>${r.min_dt_ms??''}</td><td>${r.last}</td></tr>`).join(''); }
+setInterval(refreshIds, 1000);
+
+// --- Marker
+const keys = $('#keys'); for(let k=1;k<=12;k++){ const b=document.createElement('button'); b.className='b sec'; b.textContent='T'+k; b.onclick=()=>marker('Taste '+k, k); keys.appendChild(b); }
+async function marker(label, key){
+  try{ const m = await post('/markers',{label, head:+$('#mhead').value, key: key??null, note:$('#mnote').value});
+    const tb=$('#mtab tbody'); tb.insertAdjacentHTML('afterbegin', mrow(m)); tb.firstChild.classList.add('flash'); }
+  catch(e){ alert(e.message); }
+}
+const mrow = m => `<tr><td>${new Date(m.ts*1000).toLocaleTimeString('de',{hour12:false})}</td><td>${m.label}</td><td>${m.head??''}</td><td>${m.key??''}</td><td>${m.note||''}</td><td><button class="b bad" style="padding:2px 8px" onclick="delMarker(${m.id},this)">×</button></td></tr>`;
+async function loadMarkers(){ if(!state.session_id) return; const ms = await api('/markers/'+state.session_id); $('#mtab tbody').innerHTML = ms.slice().reverse().map(mrow).join(''); }
+async function delMarker(id, btn){ await api('/markers/'+id,{method:'DELETE'}); btn.closest('tr').remove(); }
+async function simBoot(){ await post('/sim/boot'); loadMarkers(); }
+
+// --- Sessions
+async function loadSessions(){ const s = await api('/sessions');
+  const opt = s.map(x=>`<option value="${x.id}">#${x.id} ${x.name} (${x.frames} Frames, ${x.markers} Marker)</option>`).join('');
+  ['asess','dsa','dsb'].forEach(id=>{ const cur=$('#'+id).value; $('#'+id).innerHTML=opt; if(cur) $('#'+id).value=cur; });
+  $('#csvlink').href = '/api/export/'+$('#asess').value+'.csv';
+}
+$('#asess').onchange = () => $('#csvlink').href = '/api/export/'+$('#asess').value+'.csv';
+
+// --- Analyse
+const kcls = b => `<span class="k-${b.kind}" title="${b.distinct} Werte, ${b.min}–${b.max}">${b.kind==='const'?'='+b.min.toString(16).padStart(2,'0'):b.kind==='counter'?'cnt':b.distinct}</span>`;
+async function runIds(){ const sid=$('#asess').value; const rows = await api(`/analysis/${sid}/ids`); $('#idstats').style.display='';
+  $('#idstab tbody').innerHTML = rows.map(r=>`<tr style="cursor:pointer" onclick="runChecksum(${r.id})"><td>${r.id_hex}</td><td>${r.count}</td><td>${r.dlc}</td><td>${r.mean_dt_ms??''}</td>${[...Array(8)].map((_,i)=>`<td>${r.bytes[i]?kcls(r.bytes[i]):''}</td>`).join('')}<td>${r.example}</td></tr>`).join(''); }
+async function runChecksum(id){ const sid=$('#asess').value; const r = await api(`/analysis/${sid}/checksum?can_id=${id}`);
+  $('#cs').innerHTML = `Prüfsummen-Test ID ${hx(id)}: ` + (r.length? r.map(x=>`<b>${x.algo}</b> (${x.position}, ${Math.round(x.match*100)} %)`).join(', ') : 'kein Standard-Algorithmus passt (vielleicht ID einbezogen oder keine Prüfsumme)'); }
+async function runWindows(){ const sid=$('#asess').value; const w=+$('#awin').value/1000; const res = await api(`/analysis/${sid}/windows?before=${w}&after=${w}`); $('#windows').style.display='';
+  const ms = res.map(r=>r.marker); const opt = ms.map(m=>`<option value="${m.id}">${m.label} K${m.head??'-'}</option>`).join(''); $('#cmpa').innerHTML=opt; $('#cmpb').innerHTML=opt;
+  $('#winlist').innerHTML = res.map(r=>`<details ${r.candidates.length?'open':''}><summary>${new Date(r.marker.ts*1000).toLocaleTimeString('de',{hour12:false})} · ${r.marker.label} · Kopf ${r.marker.head??'-'} · ${r.window_frames} Frames im Fenster · ${r.candidates.length} Kandidaten</summary>
+    ${r.candidates.map(c=>`<div style="margin:6px 0 10px 12px"><b>${c.id_hex}</b> <span class="muted">${c.count}× (erwartet ${c.expected}, Faktor ${c.score})</span><table>${c.frames.map(f=>`<tr><td>${f.dt_ms>0?'+':''}${f.dt_ms} ms</td><td>${f.data}</td><td class="muted">${asciiOf(f.data)}</td></tr>`).join('')}</table></div>`).join('')}</details>`).join(''); }
+async function runCompare(){ const sid=$('#asess').value; const w=+$('#awin').value/1000; const r = await api(`/analysis/${sid}/compare?a=${$('#cmpa').value}&b=${$('#cmpb').value}&can_id=${ph($('#cmpid').value)}&before=${w}&after=${w}`);
+  $('#cmpres').innerHTML = r.ok ? r.diff.map(d=>`<span class="${d.changed?'chg':''}">${d.a?.toString(16).padStart(2,'0')}→${d.b?.toString(16).padStart(2,'0')}</span>`).join(' ') : r.reason; }
+
+// --- Diff
+async function runDiff(){ const id=$('#dsid').value.trim(); const r = await api(`/analysis/diff?a=${$('#dsa').value}&b=${$('#dsb').value}${id?'&can_id='+ph(id):''}`);
+  const cell = (x,d) => x ? x.data.split(' ').map((b,i)=>`<span class="${d&&d[i]&&d[i].changed?'chg':''}">${b}</span>`).join(' ') : '<span class="muted">—</span>';
+  $('#difftab tbody').innerHTML = r.map(x=>`<tr><td>${x.index}</td><td>${x.a?x.a.id+' ':''}${cell(x.a,x.diff)}</td><td class="muted">${x.a?.ascii||''}</td><td>${x.b?x.b.id+' ':''}${cell(x.b,x.diff)}</td><td class="muted">${x.b?.ascii||''}</td></tr>`).join('') || '<tr><td colspan=5 class="muted">identisch</td></tr>'; }
+
+// --- Dekoder
+async function loadDecoders(){ const d = await api('/decoders');
+  $('#dectab tbody').innerHTML = Object.entries(d).map(([id,v])=>`<tr><td>${id}</td><td>${v.name}</td><td>${v.layout.map(f=>f.name+'@'+f.pos).join(', ')}</td><td><button class="b bad" style="padding:2px 8px" onclick="api('/decoders/${ph(id)}',{method:'DELETE'}).then(loadDecoders)">×</button></td></tr>`).join(''); }
+async function saveDecoder(){ try{ await post('/decoders',{can_id:ph($('#decid').value), name:$('#decname').value, layout:JSON.parse($('#declayout').value)}); loadDecoders(); }catch(e){ alert(e.message); } }
+</script>
+</body>
+</html>
