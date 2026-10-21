@@ -140,8 +140,17 @@
       <span>ID</span><input id="cmpid" placeholder="hex" style="width:80px">
       <button class="b sec" onclick="runCompare()">Byte-Diff</button>
       <span id="cmpres" style="font-family:monospace"></span>
+      <button class="b" id="adopt" style="display:none" onclick="adoptDecoder()">Als Dekoder übernehmen →</button>
     </div>
     <div id="winlist"></div>
+  </div>
+  <div class="box">
+    <div class="row">
+      <button class="b" onclick="runValidate()">Marker-Abgleich</button>
+      <span class="muted">Prüft jeden Marker gegen die gespeicherten Dekoder (Felder <code>kopf</code> und <code>taste</code>). Alle grün = Layout stimmt.</span>
+      <span id="valsum" style="margin-left:auto"></span>
+    </div>
+    <div class="scroll"><table id="valtab"><thead><tr><th>t</th><th>Marker</th><th>Kopf</th><th>Taste</th><th>Status</th><th>Dekoder sagt</th></tr></thead><tbody></tbody></table></div>
   </div>
 </section>
 
@@ -160,7 +169,7 @@
 
 <section id="decoder">
   <div class="box">
-    <div class="muted">Layout als JSON-Liste. Felder: <code>name, pos, len, type (u8|u16le|u16be|ascii|bits|hex), scale, enum</code>. Beispiel:</div>
+    <div class="muted">Layout als JSON-Liste. Felder: <code>name, pos, len, type (u8|u16le|u16be|ascii|bits|hex), scale, enum</code>. Klick auf eine Zeile unten lädt sie zum Bearbeiten.</div>
     <div class="row" style="margin-top:8px">
       <span>ID</span><input id="decid" placeholder="hex" style="width:80px">
       <input id="decname" placeholder="Name, z. B. Tastendruck" style="width:200px">
@@ -174,7 +183,14 @@
   {"name": "ml", "pos": 1, "len": 2, "type": "u16le"}
 ]</textarea>
   </div>
-  <div class="box"><table id="dectab"><thead><tr><th>ID</th><th>Name</th><th>Felder</th><th></th></tr></thead><tbody></tbody></table></div>
+  <div class="box">
+    <div class="row">
+      <span class="muted">Gespeichert in <code id="protopath">protocol.json</code> (wird bei jedem Speichern geschrieben, gehört ins Git)</span>
+      <a class="muted" href="/api/protocol" target="_blank" style="margin-left:auto">JSON</a>
+      <a class="muted" href="/api/protocol.md" target="_blank">Markdown-Doku</a>
+    </div>
+    <table id="dectab"><thead><tr><th>ID</th><th>Name</th><th>B0</th><th>B1</th><th>B2</th><th>B3</th><th>B4</th><th>B5</th><th>B6</th><th>B7</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
 </section>
 </main>
 
@@ -266,8 +282,30 @@ async function runWindows(){ const sid=$('#asess').value; const w=+$('#awin').va
   const ms = res.map(r=>r.marker); const opt = ms.map(m=>`<option value="${m.id}">${m.label} K${m.head??'-'}</option>`).join(''); $('#cmpa').innerHTML=opt; $('#cmpb').innerHTML=opt;
   $('#winlist').innerHTML = res.map(r=>`<details ${r.candidates.length?'open':''}><summary>${new Date(r.marker.ts*1000).toLocaleTimeString('de',{hour12:false})} · ${r.marker.label} · Kopf ${r.marker.head??'-'} · ${r.window_frames} Frames im Fenster · ${r.candidates.length} Kandidaten</summary>
     ${r.candidates.map(c=>`<div style="margin:6px 0 10px 12px"><b>${c.id_hex}</b> <span class="muted">${c.count}× (erwartet ${c.expected}, Faktor ${c.score})</span><table>${c.frames.map(f=>`<tr><td>${f.dt_ms>0?'+':''}${f.dt_ms} ms</td><td>${f.data}</td><td class="muted">${asciiOf(f.data)}</td></tr>`).join('')}</table></div>`).join('')}</details>`).join(''); }
+let lastCompare = null;
 async function runCompare(){ const sid=$('#asess').value; const w=+$('#awin').value/1000; const r = await api(`/analysis/${sid}/compare?a=${$('#cmpa').value}&b=${$('#cmpb').value}&can_id=${ph($('#cmpid').value)}&before=${w}&after=${w}`);
-  $('#cmpres').innerHTML = r.ok ? r.diff.map(d=>`<span class="${d.changed?'chg':''}">${d.a?.toString(16).padStart(2,'0')}→${d.b?.toString(16).padStart(2,'0')}</span>`).join(' ') : r.reason; }
+  $('#cmpres').innerHTML = r.ok ? r.diff.map(d=>`<span class="${d.changed?'chg':''}">${d.a?.toString(16).padStart(2,'0')}→${d.b?.toString(16).padStart(2,'0')}</span>`).join(' ') : r.reason;
+  lastCompare = r.ok ? {id:$('#cmpid').value, diff:r.diff, a:+$('#cmpa').value, b:+$('#cmpb').value} : null;
+  $('#adopt').style.display = r.ok ? '' : 'none'; }
+// Vorschlag aus dem Diff: geänderte Bytes werden Felder. Unterscheiden sich die Marker nur in der
+// Taste, heißt das erste geänderte Byte "taste"; unterscheiden sie sich nur im Kopf, "kopf".
+// Konstante Bytes mit Wert == Kopfnummer des Markers werden als "kopf" vorgeschlagen.
+async function adoptDecoder(){ if(!lastCompare) return; const sid=$('#asess').value; const ms = await api('/markers/'+sid);
+  const ma = ms.find(m=>m.id===lastCompare.a), mb = ms.find(m=>m.id===lastCompare.b);
+  const changed = lastCompare.diff.filter(d=>d.changed).map(d=>d.pos); const last = lastCompare.diff.length-1;
+  const sameHead = ma && mb && ma.head===mb.head, sameKey = ma && mb && ma.key===mb.key;
+  const layout = [];
+  lastCompare.diff.forEach(d=>{ if(!d.changed && ma && d.a===ma.head && sameHead) layout.push({name:'kopf',pos:d.pos}); });
+  let named = false;
+  changed.forEach(p=>{ if(p===last && changed.length>1){ layout.push({name:'pruefsumme',pos:p,type:'hex'}); return; }
+    let name = 'b'+p; if(!named && sameHead && !sameKey){ name='taste'; named=true; } else if(!named && sameKey && !sameHead){ name='kopf'; named=true; }
+    layout.push({name, pos:p}); });
+  $('#decid').value = lastCompare.id; $('#decname').value = ma ? ma.label.replace(/\s*\d+$/,'') : ''; $('#declayout').value = JSON.stringify(layout, null, 2);
+  document.querySelector('nav button[data-tab=decoder]').click(); }
+async function runValidate(){ const sid=$('#asess').value; const w=+$('#awin').value/1000; const r = await api(`/analysis/${sid}/validate?before=${w}&after=${w}`);
+  const col = s => s==='ok'?'var(--ok)':s==='mismatch'?'var(--bad)':'var(--mut)'; const txt = s => s==='ok'?'✓ stimmt':s==='mismatch'?'✗ Abweichung':'– kein dekodierter Frame';
+  const n=r.length, ok=r.filter(x=>x.status==='ok').length; $('#valsum').innerHTML = n? `<b style="color:${ok===n?'var(--ok)':'var(--warn)'}">${ok} / ${n} Marker bestätigt</b>` : 'keine Marker mit Kopf/Taste';
+  $('#valtab tbody').innerHTML = r.map(x=>`<tr><td>${new Date(x.marker.ts*1000).toLocaleTimeString('de',{hour12:false})}</td><td>${x.marker.label}</td><td>${x.marker.head??''}</td><td>${x.marker.key??''}</td><td style="color:${col(x.status)}">${txt(x.status)}</td><td>${x.checks.map(c=>`<span class="${c.ok?'':'chg'}">${c.id_hex} ${c.name}: ${Object.entries(c.decoded).map(([k,v])=>k+'='+v).join(' ')}</span>`).join('<br>')}</td></tr>`).join(''); }
 
 // --- Diff
 async function runDiff(){ const id=$('#dsid').value.trim(); const r = await api(`/analysis/diff?a=${$('#dsa').value}&b=${$('#dsb').value}${id?'&can_id='+ph(id):''}`);
@@ -276,8 +314,10 @@ async function runDiff(){ const id=$('#dsid').value.trim(); const r = await api(
 
 // --- Dekoder
 async function loadDecoders(){ const d = await api('/decoders');
-  $('#dectab tbody').innerHTML = Object.entries(d).map(([id,v])=>`<tr><td>${id}</td><td>${v.name}</td><td>${v.layout.map(f=>f.name+'@'+f.pos).join(', ')}</td><td><button class="b bad" style="padding:2px 8px" onclick="api('/decoders/${ph(id)}',{method:'DELETE'}).then(loadDecoders)">×</button></td></tr>`).join(''); }
-async function saveDecoder(){ try{ await post('/decoders',{can_id:ph($('#decid').value), name:$('#decname').value, layout:JSON.parse($('#declayout').value)}); loadDecoders(); }catch(e){ alert(e.message); } }
+  const cells = v => { const m = Array(8).fill(''); v.layout.forEach(f=>{ const ln=f.len||1; for(let i=0;i<ln;i++){ if(f.pos+i<8) m[f.pos+i] = i===0 ? f.name : '↑'; } }); return m.map(x=>`<td style="color:${x?'var(--ok)':'var(--mut)'}">${x||'·'}</td>`).join(''); };
+  $('#dectab tbody').innerHTML = Object.entries(d).map(([id,v])=>`<tr style="cursor:pointer" onclick="editDecoder('${id}')"><td>${id}</td><td>${v.name}</td>${cells(v)}<td><button class="b bad" style="padding:2px 8px" onclick="event.stopPropagation();api('/decoders/${ph(id)}',{method:'DELETE'}).then(loadDecoders)">×</button></td></tr>`).join('') || '<tr><td colspan=11 class="muted">noch keine Dekoder – aus dem Byte-Diff im Analyse-Tab übernehmen oder hier eintragen</td></tr>'; }
+async function editDecoder(id){ const d = await api('/decoders'); const v=d[id]; $('#decid').value=id; $('#decname').value=v.name; $('#declayout').value=JSON.stringify(v.layout,null,2); }
+async function saveDecoder(){ try{ const r = await post('/decoders',{can_id:ph($('#decid').value), name:$('#decname').value, layout:JSON.parse($('#declayout').value)}); $('#protopath').textContent = r.file; loadDecoders(); }catch(e){ alert(e.message); } }
 </script>
 </body>
 </html>

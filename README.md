@@ -18,7 +18,13 @@ derselben SQLite-Datei. Die Analyse korreliert beides automatisch.
   - Byte-Diff zwischen zwei Markern für eine ID (Taste 5 vs. Taste 6 → welches Byte ist der Tastencode)
   - Prüfsummen-Test (XOR, Summe, gängige CRC-8-Varianten)
 - **Konfig-Diff**: zwei Aufnahmen Frame für Frame vergleichen, ASCII-Ansicht – für Boot-Bursts
-- **Dekoder**: Byte-Layout pro ID als JSON hinterlegen, Live-Ansicht zeigt Klartext
+- **Dekoder**: Byte-Layout pro ID hinterlegen – aus dem Byte-Diff per Klick übernehmen
+  („Als Dekoder übernehmen“) oder von Hand. Live-Ansicht zeigt danach Klartext
+- **Marker-Abgleich**: jeder Marker wird gegen die Dekoder geprüft (Felder `kopf` und `taste`);
+  alle grün = Layout stimmt über alle Beobachtungen hinweg
+- **protocol.json**: das komplette Mapping wird bei jedem Speichern als Datei neben die DB
+  geschrieben und beim Start wieder eingelesen – gehört ins Git. `/api/protocol.md` liefert
+  dieselbe Information als Markdown-Doku
 - CSV-Export pro Aufnahme
 
 ## Installation
@@ -61,7 +67,9 @@ sudo ip link set can0 up type can bitrate 250000 listen-only on
 5. *Marker-Fenster*: die ID, die beim Tastendruck aufblitzt, ist der Tastendruck-Frame
 6. *Byte-Diff* Taste 5 vs. Taste 6 → Tastencode-Byte; Kopf 3 vs. Kopf 7 → Kopf-Byte
 7. Zwei Boot-Aufnahmen mit genau einer geänderten Einstellung → *Konfig-Diff*
-8. Erkanntes Layout im Tab *Dekoder* eintragen → Live-Ansicht zeigt Klartext
+8. Beim Byte-Diff *Als Dekoder übernehmen* → Felder benennen → speichern
+9. *Marker-Abgleich*: stimmt der Dekoder mit allen Markern überein? Wenn nicht, Layout anpassen
+10. `protocol.json` committen – das ist die Protokoll-Dokumentation
 
 ## Simulator
 

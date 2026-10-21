@@ -218,3 +218,37 @@ def decode(layout: list[dict], data: bytes) -> dict:
             v = f["enum"][str(v)]
         out[f["name"]] = v
     return out
+
+
+# --- Marker-Abgleich ----------------------------------------------------
+
+def validate_markers(frames: list[dict], markers: list[dict], decoders: dict[int, dict],
+                     before: float = 0.5, after: float = 0.5) -> list[dict]:
+    """Für jeden Marker mit Kopf/Taste: dekodierte Frames im Fenster mit dem Marker vergleichen.
+
+    Ein Dekoder-Feld namens "kopf" wird gegen marker.head, "taste" gegen marker.key geprüft.
+    Ergebnis pro Marker: ok / mismatch / kein passender Frame.
+    """
+    out = []
+    for m in markers:
+        if m.get("head") is None and m.get("key") is None:
+            continue
+        t0, t1 = m["ts"] - before, m["ts"] + after
+        checks = []
+        for f in frames:
+            if not (t0 <= f["ts"] <= t1) or f["id"] not in decoders:
+                continue
+            dec = decoders[f["id"]]
+            vals = decode(dec["layout"], f["data"])
+            if "kopf" not in vals and "taste" not in vals:
+                continue
+            ok = True
+            if "kopf" in vals and m.get("head") is not None:
+                ok &= vals["kopf"] == m["head"]
+            if "taste" in vals and m.get("key") is not None:
+                ok &= vals["taste"] == m["key"]
+            checks.append({"id_hex": f"{f['id']:03X}", "name": dec["name"], "dt_ms": round(1000 * (f["ts"] - m["ts"])),
+                           "decoded": vals, "ok": ok})
+        status = "none" if not checks else ("ok" if any(c["ok"] for c in checks) else "mismatch")
+        out.append({"marker": m, "status": status, "checks": checks[:6]})
+    return out

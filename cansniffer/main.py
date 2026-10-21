@@ -17,10 +17,32 @@ from .capture import Capture
 from .db import Store
 
 DB_PATH = os.environ.get("CANSNIFFER_DB", "cansniffer.db")
+PROTOCOL_PATH = Path(os.environ.get("CANSNIFFER_PROTOCOL", "protocol.json"))
 STATIC = Path(__file__).parent / "static"
 
 store = Store(DB_PATH)
 capture = Capture(store)
+
+
+def export_protocol() -> dict:
+    """Alle Dekoder als versionierbare JSON-Datei (protocol.json) schreiben."""
+    doc = {"_hinweis": "CAN-Protokoll-Mapping, gepflegt vom CAN Sniffer (Dekoder-Tab). Versionierbar in Git.",
+           "ids": {f"{k:03X}": v for k, v in sorted(store.decoders().items())}}
+    PROTOCOL_PATH.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return doc
+
+
+def import_protocol() -> int:
+    """protocol.json beim Start einlesen, falls vorhanden (Datei gewinnt gegenüber DB)."""
+    if not PROTOCOL_PATH.exists():
+        return 0
+    doc = json.loads(PROTOCOL_PATH.read_text(encoding="utf-8"))
+    for k, v in doc.get("ids", {}).items():
+        store.set_decoder(int(k, 16), v["name"], v["layout"])
+    return len(doc.get("ids", {}))
+
+
+import_protocol()
 app = FastAPI(title="CAN Sniffer")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -185,6 +207,13 @@ def analysis_checksum(session_id: int, can_id: int):
     return analysis.checksum_test([f["data"] for f in frames])
 
 
+@app.get("/api/analysis/{session_id}/validate")
+def analysis_validate(session_id: int, before: float = 0.5, after: float = 0.5):
+    """Marker gegen Dekoder prüfen: sagt der Dekoder dasselbe wie der Marker?"""
+    frames = store.frames(session_id)
+    return analysis.validate_markers(frames, store.markers(session_id), store.decoders(), before, after)
+
+
 @app.get("/api/analysis/diff")
 def analysis_diff(a: int, b: int, can_id: int | None = None, limit: int = 500):
     fa, fb = store.frames(a), store.frames(b)
@@ -223,13 +252,38 @@ def decoders():
 @app.post("/api/decoders")
 def set_decoder(req: DecoderReq):
     store.set_decoder(req.can_id, req.name, req.layout)
-    return {"ok": True}
+    export_protocol()
+    return {"ok": True, "file": str(PROTOCOL_PATH.resolve())}
 
 
 @app.delete("/api/decoders/{can_id}")
 def del_decoder(can_id: int):
     store.delete_decoder(can_id)
+    export_protocol()
     return {"ok": True}
+
+
+@app.get("/api/protocol")
+def protocol():
+    """Das komplette Mapping als JSON – dieselbe Datei wie protocol.json."""
+    return export_protocol()
+
+
+@app.get("/api/protocol.md", response_class=PlainTextResponse)
+def protocol_md():
+    """Lesbare Protokoll-Doku als Markdown-Tabelle pro ID."""
+    out = ["# CAN-Protokoll", ""]
+    for cid, v in sorted(store.decoders().items()):
+        out += [f"## ID 0x{cid:03X} – {v['name']}", "", "| Byte | Feld | Typ | Bemerkung |", "|---|---|---|---|"]
+        for f in v["layout"]:
+            ln = f.get("len", 1)
+            pos = f"{f['pos']}" if ln == 1 else f"{f['pos']}–{f['pos'] + ln - 1}"
+            rem = []
+            if "scale" in f: rem.append(f"×{f['scale']}")
+            if "enum" in f: rem.append(", ".join(f"{k}={v2}" for k, v2 in f["enum"].items()))
+            out.append(f"| {pos} | {f['name']} | {f.get('type', 'u8')} | {'; '.join(rem)} |")
+        out.append("")
+    return "\n".join(out)
 
 
 # --- WebSocket Live ---------------------------------------------------------
